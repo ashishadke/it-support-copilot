@@ -1,0 +1,46 @@
+<div class="chat">
+  <header>
+    <h1>IT Support Copilot</h1>
+    <p>Ask about VPN, passwords, leave policy, and more.</p>
+    <div class="upload">
+  <label class="upload-btn">
+    📎 Upload document
+    <input type="file" accept=".pdf,.txt" (change)="onFileSelected($event)" hidden />
+  </label>
+  @if (uploadStatus()) {
+    <span class="upload-status">{{ uploadStatus() }}</span>
+  }
+</div>
+  </header>
+
+  <div class="messages">
+    @if (messages().length === 0) {
+      <p class="empty">No messages yet — ask your first question below.</p>
+    }
+
+    @for (m of messages(); track $index) {
+      <div class="msg {{ m.role }}">
+        <div class="bubble">{{ m.text }}</div>
+
+        @if (m.sources && m.sources.length) {
+          <div class="sources">
+            <span class="sources-label">Sources:</span>
+            @for (s of m.sources; track $index) {
+              <span class="src">{{ s.fileName }} #{{ s.chunkIndex }} · {{ s.score }}</span>
+            }
+          </div>
+        }
+      </div>
+    }
+
+    @if (loading()) {
+      <div class="msg assistant"><div class="bubble typing">Thinking…</div></div>
+    }
+  </div>
+
+  <form class="composer" (ngSubmit)="send()">
+    <input [(ngModel)]="input" name="q" placeholder="Ask an IT question…"
+           autocomplete="off" [disabled]="loading()" />
+    <button type="submit" [disabled]="loading()">Send</button>
+  </form>
+</div>

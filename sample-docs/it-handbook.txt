@@ -1,0 +1,19 @@
+Acme Corp IT Support Handbook
+
+VPN Setup
+To connect to the company VPN, install the GlobalConnect VPN client from the IT portal. Sign in with your company email and the password you use for your workstation. The VPN gateway address is vpn.acme.example. If multi-factor authentication is enabled, approve the push notification on your phone. VPN access is required when working remotely to reach internal systems like the wiki and the build servers.
+
+Password Reset
+If you forget your password, go to https://reset.acme.example and enter your employee ID. You will receive a reset link by email valid for 30 minutes. Passwords must be at least 12 characters and include an uppercase letter, a number, and a symbol. You cannot reuse any of your last 5 passwords. If you are locked out after 5 failed attempts, contact the IT helpdesk to unlock your account.
+
+Leave Policy
+Full-time employees receive 24 days of paid annual leave per year, accruing at 2 days per month. Leave requests must be submitted at least 3 working days in advance through the HR portal. Unused leave of up to 10 days can be carried over to the next calendar year. Sick leave is separate and does not count against annual leave; a medical certificate is required for sick leave longer than 2 consecutive days.
+
+Software Requests
+To request new software, raise a ticket in the IT helpdesk portal under the "Software Request" category. Standard tools (browsers, IDEs, office apps) are auto-approved. Paid or licensed software requires manager approval and may take up to 5 business days. Do not install unapproved software on company devices.
+
+Hardware and Equipment
+New employees receive a laptop, monitor, keyboard, and mouse. To request a hardware replacement or upgrade, open a ticket under "Hardware Request". Damaged equipment should be reported immediately. The standard laptop refresh cycle is every 3 years.
+
+Wi-Fi and Network
+The office Wi-Fi network is "Acme-Corp" and the guest network is "Acme-Guest". Connect using your company credentials for the main network. The guest network password rotates weekly and is displayed in meeting rooms. For network outages, check the system status page before raising a ticket.

@@ -1,0 +1,23 @@
+# ---- .NET ----
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+.vs/
+
+# ---- ASP.NET local secrets / runtime logs ----
+appsettings.Development.json
+*.log
+_apilog.txt
+
+# ---- Angular / Node ----
+node_modules/
+it-support-ui/.angular/
+it-support-ui/dist/
+npm-debug.log*
+
+# ---- OS ----
+Thumbs.db
+.DS_Store
