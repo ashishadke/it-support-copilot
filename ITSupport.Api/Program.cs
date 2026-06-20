@@ -15,6 +15,7 @@ using Npgsql;
 using OllamaSharp;
 using Pgvector.Npgsql;
 using Scalar.AspNetCore;
+using StackExchange.Redis;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -43,6 +44,11 @@ var connectionString =
 var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
 dataSourceBuilder.UseVector();
 builder.Services.AddSingleton(dataSourceBuilder.Build());
+
+// --- Redis (singleton connection, reused for all caching) ---------------------
+var redisUrl = builder.Configuration["Redis:Url"] ?? "localhost:6379";
+builder.Services.AddSingleton<IConnectionMultiplexer>(
+    ConnectionMultiplexer.Connect(redisUrl));
 
 // --- Our RAG service ----------------------------------------------------------
 builder.Services.AddScoped<RagService>();

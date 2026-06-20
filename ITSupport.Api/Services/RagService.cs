@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.AI;
 using Npgsql;
 using Pgvector;
+using StackExchange.Redis;
 using System.Net.WebSockets;
 
 namespace ITSupport.Api.Services;
@@ -21,17 +22,50 @@ public class RagService
     private readonly IEmbeddingGenerator<string, Embedding<float>> _embedder;
     private readonly IChatClient _chat;
     private readonly McpService _mcp;
+    private readonly IDatabase _cache;   // Redis: GetDatabase() gives the key/value API
 
     public RagService(
         NpgsqlDataSource db,
         IEmbeddingGenerator<string, Embedding<float>> embedder,
         IChatClient chat,
-        McpService mcp)
+        McpService mcp,
+        IConnectionMultiplexer redis)
     {
         _db = db;
         _embedder = embedder;
         _chat = chat;
         _mcp = mcp;
+        _cache = redis.GetDatabase();
+    }
+
+    // Embed text, but check Redis first. Embeddings are DETERMINISTIC (same text ->
+    // same vector), so caching them is always safe and never goes stale.
+    // Vectors are stored as raw bytes (768 floats = 3072 bytes).
+    private async Task<float[]> EmbedCachedAsync(string text)
+    {
+        var key = $"emb:{text}";
+
+        // 1. Cache HIT -> return the stored vector, skip the Ollama call entirely.
+        RedisValue cached = await _cache.StringGetAsync(key);
+        if (cached.HasValue)
+        {
+            Console.WriteLine($"[CACHE] embedding HIT  \"{text}\"");
+            var bytes = (byte[])cached!;
+            var hit = new float[bytes.Length / sizeof(float)];
+            Buffer.BlockCopy(bytes, 0, hit, 0, bytes.Length);
+            return hit;
+        }
+
+        // 2. Cache MISS -> generate it, store it for next time, return it.
+        Console.WriteLine($"[CACHE] embedding MISS \"{text}\"");
+        var emb = await _embedder.GenerateAsync([text]);
+        var vector = emb[0].Vector.ToArray();
+
+        var outBytes = new byte[vector.Length * sizeof(float)];
+        Buffer.BlockCopy(vector, 0, outBytes, 0, outBytes.Length);
+        await _cache.StringSetAsync(key, outBytes);
+
+        return vector;
     }
 
     // INGEST: chunk -> embed -> store each chunk. Re-uploading the same file name
@@ -58,6 +92,13 @@ public class RagService
             cmd.Parameters.AddWithValue(new Vector(emb[0].Vector.ToArray()));
             await cmd.ExecuteNonQueryAsync();
         }
+
+        // A document changed -> previously cached ANSWERS may now be wrong.
+        // Bump the response-cache version so all old answers are abandoned.
+        // (Embedding cache stays valid — those vectors never go stale.)
+        await _cache.StringIncrementAsync("resp:version");
+        Console.WriteLine("[CACHE] response cache invalidated (new document ingested)");
+
         return chunks.Count;
     }
 
@@ -95,8 +136,29 @@ public class RagService
     public async IAsyncEnumerable<string> AskStreamingAsync(
         string question, List<ChatMessageDto>? history = null, int topK = 5)
     {
-        // 1. Decide the path first (with history so follow-ups like "confirm" route correctly).
+        // EARLY response-cache check: do this BEFORE routing or any LLM call, so a
+        // repeat question is served instantly (the router is itself an LLM call we skip).
+        // We only ever STORE clean (no-history) RAG answers, so a hit here is always safe.
+        bool noHistory = history is null || history.Count == 0;
+        string? respKey = null;
+        if (noHistory)
+        {
+            long version = (long?)await _cache.StringGetAsync("resp:version") ?? 0;
+            respKey = $"resp:{version}:{question}";
+            RedisValue cachedAnswer = await _cache.StringGetAsync(respKey);
+            if (cachedAnswer.HasValue)
+            {
+                Console.WriteLine($"[CACHE] response HIT  \"{question}\"");
+                yield return (string)cachedAnswer!;
+                yield break;   // skip routing, retrieval, generation — all of it
+            }
+        }
+
+        // 1. Decide the path (with history so follow-ups like "confirm" route correctly).
         var route = await RouteAsync(question, history);
+
+        // Store the finished answer only for clean RAG turns.
+        bool cacheable = route == "rag" && noHistory;
 
         ChatOptions options = new() { Temperature = 0.1f };
         ChatMessage systemMsg;
@@ -118,9 +180,10 @@ public class RagService
         }
         else
         {
+            if (cacheable) Console.WriteLine($"[CACHE] response MISS \"{question}\"");
+
             // RAG: retrieve, then build a grounded prompt.
-            var qEmb = await _embedder.GenerateAsync([question]);
-            var queryVec = new Vector(qEmb[0].Vector.ToArray());
+            var queryVec = new Vector(await EmbedCachedAsync(question));
 
             var retrieved = new List<string>();
             await using (var cmd = _db.CreateCommand(
@@ -143,11 +206,17 @@ public class RagService
         messages.AddRange(ToHistory(history));
         messages.Add(new(ChatRole.User, question));
 
-        // 2. Stream whichever path we chose.
+        // 2. Stream whichever path we chose, collecting the full text as we go.
+        var full = new System.Text.StringBuilder();
         await foreach (var update in _chat.GetStreamingResponseAsync(messages, options))
         {
+            full.Append(update.Text);
             yield return update.Text;
         }
+
+        // 3. Cache the finished answer (1-hour TTL) so an identical repeat is instant.
+        if (cacheable)
+            await _cache.StringSetAsync(respKey!, full.ToString(), TimeSpan.FromHours(1));
     }
     // ROUTER: ask the LLM to classify the question, return "rag" or "direct".
     public async Task<string> RouteAsync(string question, List<ChatMessageDto>? history = null)
@@ -298,8 +367,7 @@ public class RagService
     private async Task<(string answer, List<Citation> sources, string context, double topScore)>
         RetrieveAndAnswerAsync(string question, string searchQuery, int topK)
     {
-        var qEmb = await _embedder.GenerateAsync([searchQuery]);
-        var queryVec = new Vector(qEmb[0].Vector.ToArray());
+        var queryVec = new Vector(await EmbedCachedAsync(searchQuery));
 
         var retrieved = new List<(string file, int idx, string content, double score)>();
         await using (var cmd = _db.CreateCommand(
