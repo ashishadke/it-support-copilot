@@ -2,6 +2,7 @@ using Microsoft.Extensions.AI;
 using Npgsql;
 using Pgvector;
 using StackExchange.Redis;
+using System.ComponentModel;
 
 namespace ITSupport.Api.Services;
 
@@ -21,6 +22,7 @@ public class RagService
     private readonly IChatClient _chat;
     private readonly McpService _mcp;
     private readonly IDatabase _cache;   // Redis: GetDatabase() gives the key/value API
+    private readonly AIFunction _searchTool;   // document retrieval, exposed to the LLM as a tool
 
     public RagService(
         NpgsqlDataSource db,
@@ -34,6 +36,15 @@ public class RagService
         _chat = chat;
         _mcp = mcp;
         _cache = redis.GetDatabase();
+
+        // Wrap document retrieval as an AIFunction so the agent can CALL it like any
+        // other tool (agentic RAG) — it sits in the same toolbox as the MCP tools.
+        _searchTool = AIFunctionFactory.Create(
+            SearchDocumentsAsync,
+            name: "search_documents",
+            description: "Search the company's internal documents (IT handbook, policies, " +
+                         "procedures, employee resumes) for relevant information. Use this for ANY " +
+                         "question about the company, its policies/procedures, or its people.");
     }
 
     // Embed text, but check Redis first. Embeddings are DETERMINISTIC (same text ->
@@ -134,82 +145,60 @@ public class RagService
                     ? ChatRole.Assistant : ChatRole.User,
                 m.Text));
 
+    // AGENTIC RAG — the agent's single path. We hand the LLM the whole toolbox
+    // (document search + the MCP tools) and let IT decide what to call, including
+    // SEVERAL tools for one question. No router picking a single path anymore.
     public async IAsyncEnumerable<string> AskStreamingAsync(
-        string question, List<ChatMessageDto>? history = null, int topK = 8)
+        string question, List<ChatMessageDto>? history = null)
     {
-        // EARLY response-cache check: do this BEFORE routing or any LLM call, so a
-        // repeat question is served instantly (the router is itself an LLM call we skip).
-        // We only ever STORE clean (no-history) RAG answers, so a hit here is always safe.
-        bool noHistory = history is null || history.Count == 0;
-        string? respKey = null;
-        if (noHistory)
-        {
-            long version = (long?)await _cache.StringGetAsync("resp:version") ?? 0;
-            respKey = $"resp:{version}:{question}";
-            RedisValue cachedAnswer = await _cache.StringGetAsync(respKey);
-            if (cachedAnswer.HasValue)
-            {
-                Console.WriteLine($"[CACHE] response HIT  \"{question}\"");
-                yield return (string)cachedAnswer!;
-                yield break;   // skip routing, retrieval, generation — all of it
-            }
-        }
+        var systemMsg = new ChatMessage(ChatRole.System,
+            "You are an IT support assistant for Acme Corp. You have these tools:\n" +
+            "- search_documents: search company docs (IT handbook, policies, procedures, employee " +
+            "resumes). Use it for ANY question about the company, its policies/procedures, or people. " +
+            "Answer ONLY from what it returns; if nothing relevant comes back, say you don't know.\n" +
+            "- check_system_health: live up/down status of a named system.\n" +
+            "- get_ticket_status: look up a support ticket by its numeric id.\n" +
+            "- create_ticket: creates a ticket — this CHANGES data, so FIRST call it with " +
+            "confirmed=false to preview and ask the user to confirm; only call confirmed=true after " +
+            "they have explicitly confirmed.\n" +
+            "A single question may need SEVERAL tools (e.g. look up a person in the documents AND " +
+            "check a ticket) — call as many as you need, then give ONE combined answer. Cite document " +
+            "sources by file name. For general knowledge unrelated to the company, just answer directly.");
 
-        // 1. Decide the path (with history so follow-ups like "confirm" route correctly).
-        var route = await RouteAsync(question, history);
-
-        // Store the finished answer only for clean RAG turns.
-        bool cacheable = route == "rag" && noHistory;
-
-        ChatOptions options = new() { Temperature = 0.1f };
-        ChatMessage systemMsg;
-
-        if (route == "direct")
-        {
-            systemMsg = new(ChatRole.System, "You are a helpful assistant. Answer concisely.");
-        }
-        else if (route == "tool")
-        {
-            // TOOL: tools + human-approval rule for write actions.
-            systemMsg = new(ChatRole.System,
-                "You are an IT support assistant with tools. For READ-ONLY checks (system health, " +
-                "ticket status) call the tool and answer. For ACTIONS that change data (creating a " +
-                "ticket) you MUST first call create_ticket with confirmed=false to preview, show the " +
-                "user the proposed details, and ask them to confirm. Only call create_ticket with " +
-                "confirmed=true after the user has explicitly confirmed in their latest message.");
-            options = new ChatOptions { Tools = [.. _mcp.Tools], Temperature = 0 };
-        }
-        else
-        {
-            if (cacheable) Console.WriteLine($"[CACHE] response MISS \"{question}\"");
-
-            // RAG WITH SELF-CHECK: AskAsync does retrieve -> verify (LLM-as-judge) ->
-            // and if the answer is ungrounded or retrieval was weak, it rewrites the
-            // query and retries. We need the FULL answer to verify it, so we generate
-            // it first, then "stream" the vetted result word-by-word to keep the UI live.
-            var result = await AskAsync(question, topK);
-            var finalAnswer = result.Answer;
-
-            // Cache the verified answer (1-hour TTL) so an identical repeat is instant.
-            if (cacheable)
-                await _cache.StringSetAsync(respKey!, finalAnswer, TimeSpan.FromHours(1));
-
-            foreach (var word in finalAnswer.Split(' '))
-                yield return word + " ";
-            yield break;
-        }
-
-        // Build: system + prior conversation (so 'confirm' has context) + the new question.
-        // (Only the 'direct' and 'tool' routes reach here — 'rag' returned above.)
         var messages = new List<ChatMessage> { systemMsg };
         messages.AddRange(ToHistory(history));
         messages.Add(new(ChatRole.User, question));
 
-        // Stream the direct/tool answer token-by-token as the model produces it.
+        // One toolbox: document search + all MCP tools. UseFunctionInvocation runs the
+        // call loop, so the model can chain tools before producing the final answer.
+        var tools = new List<AITool> { _searchTool };
+        tools.AddRange(_mcp.Tools);
+        var options = new ChatOptions { Tools = tools, Temperature = 0 };
+
         await foreach (var update in _chat.GetStreamingResponseAsync(messages, options))
-        {
             yield return update.Text;
-        }
+    }
+
+    // The document-retrieval TOOL the agent calls. Embeds the query (cached), pulls the
+    // most similar chunks from pgvector, and returns them with source citations.
+    [Description("Search the company's internal documents for relevant information.")]
+    public async Task<string> SearchDocumentsAsync(
+        [Description("what to look for, e.g. 'VPN setup' or 'Ashish work experience'")] string query)
+    {
+        Console.WriteLine($"[TOOL] search_documents(\"{query}\")");
+
+        var queryVec = new Vector(await EmbedCachedAsync(query));
+        var chunks = new List<string>();
+        await using var cmd = _db.CreateCommand(
+            "SELECT file_name, chunk_index, content FROM doc_chunks ORDER BY embedding <=> $1 LIMIT 8;");
+        cmd.Parameters.AddWithValue(queryVec);
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            chunks.Add($"[Source: {reader.GetString(0)} #{reader.GetInt32(1)}]\n{reader.GetString(2)}");
+
+        return chunks.Count > 0
+            ? string.Join("\n\n", chunks)
+            : "No matching documents found in the knowledge base.";
     }
     // ROUTER: ask the LLM to classify the question, return "rag" or "direct".
     public async Task<string> RouteAsync(string question, List<ChatMessageDto>? history = null)
