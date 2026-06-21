@@ -1,0 +1,49 @@
+[
+  {
+    "name": "password_reset",
+    "question": "how do I reset my password?",
+    "expectedRoute": "rag",
+    "expectedKeywords": ["employee", "30 minutes"]
+  },
+  {
+    "name": "vpn_setup",
+    "question": "how do I connect to the VPN?",
+    "expectedRoute": "rag",
+    "expectedKeywords": ["GlobalConnect", "vpn.acme.example"]
+  },
+  {
+    "name": "leave_policy",
+    "question": "what are the leave policies?",
+    "expectedRoute": "rag",
+    "expectedKeywords": ["24 days", "HR portal"]
+  },
+  {
+    "name": "wifi_networks",
+    "question": "what are the office wifi network names?",
+    "expectedRoute": "rag",
+    "expectedKeywords": ["Acme-Corp", "Acme-Guest"]
+  },
+  {
+    "name": "software_request",
+    "question": "how do I request new software?",
+    "expectedRoute": "rag",
+    "expectedKeywords": ["Software Request"]
+  },
+  {
+    "name": "who_is_ashish",
+    "question": "who is Ashish and what is his work experience?",
+    "expectedRoute": "rag",
+    "expectedKeywords": ["AlphaFinsoft"]
+  },
+  {
+    "name": "build_server_health",
+    "question": "is the build server down?",
+    "expectedRoute": "tool",
+    "expectedKeywords": ["down"]
+  },
+  {
+    "name": "out_of_scope_company_car",
+    "question": "what is the company car reimbursement policy?",
+    "mustSayDontKnow": true
+  }
+]

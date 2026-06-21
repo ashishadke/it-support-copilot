@@ -101,7 +101,10 @@ public class RagService
     }
 
     // ASK: embed question -> retrieve Top-K -> grounded answer + citations.
-    public async Task<ChatAnswer> AskAsync(string question, int topK = 5)
+    // topK=8: broad "tell me everything" questions need enough chunks to cover a
+    // whole document (e.g. a resume split into ~6 chunks) — too low and the answer
+    // comes back incomplete (missing a job, etc.).
+    public async Task<ChatAnswer> AskAsync(string question, int topK = 8)
     {
         // First attempt: search using the question as-is.
         var first = await RetrieveAndAnswerAsync(question, question, topK);
@@ -132,7 +135,7 @@ public class RagService
                 m.Text));
 
     public async IAsyncEnumerable<string> AskStreamingAsync(
-        string question, List<ChatMessageDto>? history = null, int topK = 5)
+        string question, List<ChatMessageDto>? history = null, int topK = 8)
     {
         // EARLY response-cache check: do this BEFORE routing or any LLM call, so a
         // repeat question is served instantly (the router is itself an LLM call we skip).

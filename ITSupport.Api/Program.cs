@@ -53,6 +53,7 @@ builder.Services.AddSingleton<IConnectionMultiplexer>(
 
 // --- Our RAG service ----------------------------------------------------------
 builder.Services.AddScoped<RagService>();
+builder.Services.AddScoped<EvaluationService>();   // runs the eval set against the agent
 // Allow the Angular dev server (localhost:4200) to call this API from the browser.
 builder.Services.AddCors(options =>
 {
