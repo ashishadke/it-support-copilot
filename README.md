@@ -3,11 +3,12 @@
 A helpdesk assistant for an internal IT team, built in **.NET 10**. It combines four
 patterns that together make a real *agent* rather than a single LLM call:
 
-- **RAG** — answers questions from internal IT documents (handbook, policies) grounded in
-  retrieved text, with citations and an honest "I don't know" when the docs don't cover it.
+- **Agentic RAG** — document retrieval is exposed to the LLM as a tool (`search_documents`),
+  grounded in pgvector with citations and an honest "I don't know" when the docs don't cover it.
 - **Tools via MCP** — a separate **Model Context Protocol** server exposes live actions
   (check system health, look up / create support tickets) that the agent can call.
-- **Agent orchestration** — a hand-built control loop: *route → retrieve → verify → self-correct*.
+- **Agentic orchestration** — no router: the LLM is handed one toolbox (document search + MCP
+  tools) and decides which to call, chaining several in a single turn when a question needs it.
 - **Human-in-the-loop** — data-changing actions (creating a ticket) are previewed and require
   explicit user confirmation before they run.
 
@@ -20,22 +21,23 @@ patterns that together make a real *agent* rather than a single LLM call:
 ```
             ┌──────────────┐   POST /api/chat/stream (SSE)   ┌────────────────────┐
             │  Angular UI  │ ───────────────────────────────►│   ITSupport.Api    │
-            │ (chat + SSE) │ ◄─────────────── tokens ─────────│  (ASP.NET Core)    │
+            │ (chat + SSE) │ ◄─────────────── tokens ─────────│   (Controllers)    │
             └──────────────┘                                  └─────────┬──────────┘
                                                                         │
-                          ┌─────────────────────────────────────────────┤
-                          │                          │                   │
-                    Router (LLM)              RAG retrieval         Tool calling
-                  rag / tool / direct      pgvector cosine       (MCP tools as
-                          │                  Top-K search         AIFunctions)
-                          │                          │                   │
-                          ▼                          ▼                   ▼ JSON-RPC / stdio
-                  Verify + self-correct      Postgres + pgvector  ┌────────────────────┐
-                   (LLM-as-judge, retry)       (doc_chunks)       │ ITSupport.McpServer│
-                                                                  │  (separate .exe)   │
-                                                                  │  HealthTools       │
-                                                                  │  TicketTools ──────┼──► Postgres
-                                                                  └────────────────────┘    (tickets)
+                               AskStreamingAsync — ONE agentic path: the LLM is handed a
+                               toolbox and picks/chains tools itself (UseFunctionInvocation)
+                          ┌─────────────────────────────────────────────┴──────────┐
+                          ▼                                                          ▼
+                 search_documents (local tool)                   MCP tools (over stdio / JSON-RPC)
+                 embed (cached in Redis) →                       check_system_health
+                 pgvector top-8 + citations                      get_ticket_status
+                          │                                      create_ticket (preview → confirm)
+                          ▼                                                          ▼
+                 Postgres + pgvector                             ┌────────────────────┐
+                   (doc_chunks)                                  │ ITSupport.McpServer │
+                                                                 │  (separate .exe)    │
+                                                                 │  → Postgres (tickets)│
+                                                                 └────────────────────┘
 ```
 
 **Models run locally via [Ollama](https://ollama.com):**
@@ -43,21 +45,24 @@ patterns that together make a real *agent* rather than a single LLM call:
 
 ### How a request flows
 1. The UI streams the question (plus recent history) to `/api/chat/stream`.
-2. The **router** classifies it: `rag` (answer from docs), `tool` (call an action), or `direct`.
-3. **rag** → embed query → cosine search in pgvector → grounded answer → **verify** (LLM-as-judge);
-   if weak/ungrounded, **rewrite the query and retry once**.
-4. **tool** → the LLM is given the MCP tools and picks one; `UseFunctionInvocation()` runs the
-   call over stdio/JSON-RPC to the MCP server, feeds the result back, and the LLM replies.
-5. Creating a ticket is gated: first call **previews** (`confirmed=false`); only after the user
-   confirms does it **insert** (`confirmed=true`).
+2. The agent is handed **one toolbox** — `search_documents` plus the MCP tools — and a system
+   prompt. There is **no router**: the LLM decides which tools to call.
+3. `UseFunctionInvocation()` runs the tool loop, so the model can call **several tools in one turn**
+   (e.g. `search_documents` for a policy question *and* `get_ticket_status` for a ticket lookup),
+   then compose one combined answer.
+4. `search_documents` embeds the query (cached in Redis), does a top-8 cosine search in pgvector,
+   and returns the chunks with citations; the model answers only from what it gets back.
+5. Creating a ticket is gated: the model first **previews** (`confirmed=false`) and asks the user
+   to confirm; only after an explicit "yes" does it call `create_ticket` with `confirmed=true`.
 
 ## Tech stack
 | Layer | Tech |
 |------|------|
-| API | ASP.NET Core minimal APIs (.NET 10), SSE streaming |
-| AI | Microsoft.Extensions.AI, OllamaSharp (`IChatClient`, `IEmbeddingGenerator`) |
+| API | ASP.NET Core (.NET 10) Web API — controllers, SSE streaming |
+| AI | Microsoft.Extensions.AI, OllamaSharp (`IChatClient`, `IEmbeddingGenerator`, `AIFunctionFactory`) |
 | Vectors | PostgreSQL + [pgvector](https://github.com/pgvector/pgvector) (cosine `<=>`) |
 | Tools | Model Context Protocol (`ModelContextProtocol` 1.4.0) over stdio |
+| Caching | Redis (`StackExchange.Redis`) — embedding cache |
 | UI | Angular (standalone components, signals, fetch + ReadableStream for streaming) |
 
 ## Prerequisites
@@ -69,6 +74,7 @@ patterns that together make a real *agent* rather than a single LLM call:
   ollama pull qwen3:4b
   ```
 - PostgreSQL with the **pgvector** extension installed.
+- [Redis](https://redis.io) running locally on `localhost:6379` (used for the embedding cache).
 
 ## Setup
 
@@ -120,18 +126,28 @@ npm start
 ```
 
 ### 4. Try it
-- Upload a document at the top of the UI, then ask a question about it (RAG).
+- Upload a document at the top of the UI, then ask a question about it (calls `search_documents`).
 - Ask *"is the build server down?"* (tool: `check_system_health`).
 - Ask *"what's the status of ticket 1?"* (tool: `get_ticket_status`).
+- Ask a **compound** question: *"who is Ashish and what is the status of ticket 1?"* — the agent
+  calls **both** `search_documents` and `get_ticket_status` in one turn and combines the answer.
 - Ask *"create a ticket for my flickering monitor"* → it previews → reply *"confirm"* to create it
   (human-in-the-loop).
 
+### Evaluation
+`GET /api/eval` runs `ITSupport.Api/eval-set.json` (a list of test questions + expected facts)
+against the agent and returns a scored pass/fail report — automated regression testing for the
+RAG answers. Edit `eval-set.json` to add your own test cases.
+
 ## Project layout
 ```
-ITSupport.Api/          ASP.NET Core API — RAG, router, verify, MCP client, endpoints
+ITSupport.Api/          ASP.NET Core Web API
+  Controllers/          ChatController (SSE), DocumentsController, EvalController
   Services/
-    RagService.cs       the agent core (route / retrieve / verify / self-correct)
+    RagService.cs       the agent core: search_documents tool + agentic streaming path
     McpService.cs       launches the MCP server, discovers its tools
+    EvaluationService.cs runs eval-set.json against the agent (regression testing)
+  eval-set.json         the evaluation "exam" (questions + expected facts)
 ITSupport.McpServer/    standalone MCP server (separate process)
   HealthTools.cs        check_system_health
   TicketTools.cs        get_ticket_status, create_ticket (with confirm gate)
