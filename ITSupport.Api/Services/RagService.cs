@@ -182,41 +182,33 @@ public class RagService
         {
             if (cacheable) Console.WriteLine($"[CACHE] response MISS \"{question}\"");
 
-            // RAG: retrieve, then build a grounded prompt.
-            var queryVec = new Vector(await EmbedCachedAsync(question));
+            // RAG WITH SELF-CHECK: AskAsync does retrieve -> verify (LLM-as-judge) ->
+            // and if the answer is ungrounded or retrieval was weak, it rewrites the
+            // query and retries. We need the FULL answer to verify it, so we generate
+            // it first, then "stream" the vetted result word-by-word to keep the UI live.
+            var result = await AskAsync(question, topK);
+            var finalAnswer = result.Answer;
 
-            var retrieved = new List<string>();
-            await using (var cmd = _db.CreateCommand(
-                "SELECT content FROM doc_chunks ORDER BY embedding <=> $1 LIMIT $2;"))
-            {
-                cmd.Parameters.AddWithValue(queryVec);
-                cmd.Parameters.AddWithValue(topK);
-                await using var reader = await cmd.ExecuteReaderAsync();
-                while (await reader.ReadAsync())
-                    retrieved.Add(reader.GetString(0));
-            }
-            string context = string.Join("\n\n", retrieved);
-            systemMsg = new(ChatRole.System,
-                "You are an IT support assistant. Answer using ONLY the context below. " +
-                "If the answer is not in the context, say you don't know.\n\nContext:\n" + context);
+            // Cache the verified answer (1-hour TTL) so an identical repeat is instant.
+            if (cacheable)
+                await _cache.StringSetAsync(respKey!, finalAnswer, TimeSpan.FromHours(1));
+
+            foreach (var word in finalAnswer.Split(' '))
+                yield return word + " ";
+            yield break;
         }
 
         // Build: system + prior conversation (so 'confirm' has context) + the new question.
+        // (Only the 'direct' and 'tool' routes reach here — 'rag' returned above.)
         var messages = new List<ChatMessage> { systemMsg };
         messages.AddRange(ToHistory(history));
         messages.Add(new(ChatRole.User, question));
 
-        // 2. Stream whichever path we chose, collecting the full text as we go.
-        var full = new System.Text.StringBuilder();
+        // Stream the direct/tool answer token-by-token as the model produces it.
         await foreach (var update in _chat.GetStreamingResponseAsync(messages, options))
         {
-            full.Append(update.Text);
             yield return update.Text;
         }
-
-        // 3. Cache the finished answer (1-hour TTL) so an identical repeat is instant.
-        if (cacheable)
-            await _cache.StringSetAsync(respKey!, full.ToString(), TimeSpan.FromHours(1));
     }
     // ROUTER: ask the LLM to classify the question, return "rag" or "direct".
     public async Task<string> RouteAsync(string question, List<ChatMessageDto>? history = null)
