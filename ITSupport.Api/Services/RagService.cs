@@ -1,9 +1,7 @@
-using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.AI;
 using Npgsql;
 using Pgvector;
 using StackExchange.Redis;
-using System.Net.WebSockets;
 
 namespace ITSupport.Api.Services;
 
@@ -260,49 +258,6 @@ public class RagService
         route = route.Trim().ToLowerInvariant();
         Console.WriteLine($"[ROUTER] \"{question}\" -> {route}");
         return route;
-    }    // DIRECT path: answer from the model's own knowledge, no retrieval, no citations.
-    public async Task<ChatAnswer> AnswerDirectAsync(string question)
-    {
-        var messages = new List<ChatMessage>
-    {
-        new(ChatRole.System, "You are a helpful assistant. Answer concisely."),
-        new(ChatRole.User, question)
-    };
-        var response = await _chat.GetResponseAsync(messages, new ChatOptions { Temperature = 0.3f });
-        return new ChatAnswer(response.Text, [], "direct");
-    }
-
-    // AGENT: route first, then take the chosen path.
-    public async Task<ChatAnswer> AskAgentAsync(string question, List<ChatMessageDto>? history = null)
-    {
-        var route = await RouteAsync(question, history);
-        return route switch
-        {
-            "direct" => await AnswerDirectAsync(question),
-            "tool"   => await AnswerWithToolsAsync(question, history),
-            _        => await AskAsync(question)   // "rag"
-        };
-    }
-
-    // TOOL path: give the LLM the MCP server's tools and let it call them.
-    // For write actions (create ticket) it must preview + get user confirmation first.
-    public async Task<ChatAnswer> AnswerWithToolsAsync(string question, List<ChatMessageDto>? history = null)
-    {
-        var messages = new List<ChatMessage>
-        {
-            new(ChatRole.System,
-                "You are an IT support assistant with tools. For READ-ONLY checks (system health, " +
-                "ticket status) call the tool and answer. For ACTIONS that change data (creating a " +
-                "ticket) you MUST first call create_ticket with confirmed=false to preview, show the " +
-                "user the proposed details, and ask them to confirm. Only call create_ticket with " +
-                "confirmed=true after the user has explicitly confirmed in their latest message.")
-        };
-        messages.AddRange(ToHistory(history));
-        messages.Add(new(ChatRole.User, question));
-
-        var options = new ChatOptions { Tools = [.. _mcp.Tools], Temperature = 0 };
-        var response = await _chat.GetResponseAsync(messages, options);
-        return new ChatAnswer(response.Text, [], "tool");
     }
 
     // VERIFY (LLM-as-judge): is the answer actually supported by the retrieved context?
