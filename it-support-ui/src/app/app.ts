@@ -9,6 +9,18 @@ interface ChatMessage {
   sources?: Citation[];
 }
 
+// Reuse the same conversationId across page reloads (stored in the browser) so the
+// server-side memory persists through a refresh. A "new chat" would clear this key.
+function getConversationId(): string {
+  const key = 'itsupport.conversationId';
+  let id = localStorage.getItem(key);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(key, id);
+  }
+  return id;
+}
+
 @Component({
   selector: 'app-root',
   imports: [FormsModule],          // FormsModule gives us [(ngModel)] for the input box
@@ -21,7 +33,7 @@ export class App {
   messages = signal<ChatMessage[]>([]);  // the whole conversation (reactive)
   loading = signal(false);               // true while waiting for the API
   input = '';                            // bound to the text box
-  conversationId = crypto.randomUUID();  // one id per chat; the server ties messages to it
+  conversationId = getConversationId();  // persisted in the browser so memory survives refresh
 
  async send() {
   const question = this.input.trim();
