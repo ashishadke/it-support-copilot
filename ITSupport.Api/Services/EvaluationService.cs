@@ -80,7 +80,9 @@ public class EvaluationService
         {
             "don't know", "do not know", "not in the context", "no information",
             "couldn't find", "could not find", "don't have", "not available",
-            "isn't in", "is not in", "unable to"
+            "isn't in", "is not in", "unable to",
+            "do not contain", "does not contain", "no relevant information",
+            "none mention", "not contain", "no specific information"
         }.Any(lower.Contains);
 
     // Load the exam from eval-set.json (editable without recompiling).

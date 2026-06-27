@@ -1,23 +1,43 @@
 namespace ITSupport.Api.Services;
 
-// Splits a document into medium-sized, overlapping chunks (same strategy proven
-// in the console RAG: fixed size + overlap so ideas spanning a boundary survive).
+// Structure-aware chunking: we split on LINE boundaries and pack whole lines into
+// chunks up to a size budget — never cutting mid-word or mid-line. This keeps a
+// section's heading + its details together (e.g. a job's "Role, Company, Dates" and
+// its bullets), which fixed-size character windows used to slice apart.
 public static class Chunker
 {
-    public static List<string> Split(string text, int chunkSize = 600, int overlap = 100)
+    public static List<string> Split(string text, int maxChars = 700, int overlapLines = 1)
     {
-        text = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var lines = text.Split('\n')
+            .Select(l => l.Trim())
+            .Where(l => l.Length > 0)
+            .ToList();
 
         var chunks = new List<string>();
-        if (text.Length == 0) return chunks;
+        if (lines.Count == 0) return chunks;
 
-        int start = 0;
-        while (start < text.Length)
+        var current = new List<string>();
+        int currentLen = 0;
+
+        foreach (var line in lines)
         {
-            int length = Math.Min(chunkSize, text.Length - start);
-            chunks.Add(text.Substring(start, length));
-            start += chunkSize - overlap;
+            // If adding this line would overflow the budget, close the current chunk first.
+            if (currentLen + line.Length > maxChars && current.Count > 0)
+            {
+                chunks.Add(string.Join("\n", current));
+                // Carry the last few lines into the next chunk so context spanning a
+                // boundary survives (the structure-aware equivalent of overlap).
+                current = current.Skip(Math.Max(0, current.Count - overlapLines)).ToList();
+                currentLen = current.Sum(l => l.Length);
+            }
+
+            current.Add(line);
+            currentLen += line.Length;
         }
+
+        if (current.Count > 0)
+            chunks.Add(string.Join("\n", current));
+
         return chunks;
     }
 }
