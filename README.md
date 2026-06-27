@@ -100,6 +100,23 @@ CREATE TABLE tickets (
     status      TEXT NOT NULL DEFAULT 'Open',
     created_at  TIMESTAMP DEFAULT NOW()
 );
+
+-- Conversation memory (server-side chat history, keyed by conversationId)
+CREATE TABLE conversations (
+    id          TEXT PRIMARY KEY,
+    summary     TEXT,
+    created_at  TIMESTAMPTZ DEFAULT now(),
+    updated_at  TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE messages (
+    id              BIGSERIAL PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role            TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    created_at      TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX idx_messages_conv ON messages(conversation_id, id);
 ```
 
 ### 2. Configuration

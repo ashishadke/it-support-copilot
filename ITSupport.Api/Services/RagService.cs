@@ -149,9 +149,9 @@ public class RagService
     // (document search + the MCP tools) and let IT decide what to call, including
     // SEVERAL tools for one question. No router picking a single path anymore.
     public async IAsyncEnumerable<string> AskStreamingAsync(
-        string question, List<ChatMessageDto>? history = null)
+        string question, List<ChatMessageDto>? history = null, string? summary = null)
     {
-        var systemMsg = new ChatMessage(ChatRole.System,
+        var prompt =
             "You are an IT support assistant for Acme Corp. You have these tools:\n" +
             "- search_documents: search company docs (IT handbook, policies, procedures, employee " +
             "resumes). Use it for ANY question about the company, its policies/procedures, or people. " +
@@ -163,9 +163,14 @@ public class RagService
             "they have explicitly confirmed.\n" +
             "A single question may need SEVERAL tools (e.g. look up a person in the documents AND " +
             "check a ticket) — call as many as you need, then give ONE combined answer. Cite document " +
-            "sources by file name. For general knowledge unrelated to the company, just answer directly.");
+            "sources by file name. For general knowledge unrelated to the company, just answer directly.";
 
-        var messages = new List<ChatMessage> { systemMsg };
+        // Older conversation, condensed (milestone 2b) — gives the agent long-range
+        // memory without resending every past message.
+        if (!string.IsNullOrWhiteSpace(summary))
+            prompt += "\n\nSummary of earlier conversation (for context):\n" + summary;
+
+        var messages = new List<ChatMessage> { new(ChatRole.System, prompt) };
         messages.AddRange(ToHistory(history));
         messages.Add(new(ChatRole.User, question));
 

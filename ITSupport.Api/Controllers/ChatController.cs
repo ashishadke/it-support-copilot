@@ -10,24 +10,49 @@ namespace ITSupport.Api.Controllers;
 public class ChatController : ControllerBase
 {
     private readonly RagService _rag;
+    private readonly ConversationStore _conversations;
 
-    public ChatController(RagService rag) => _rag = rag;
+    public ChatController(RagService rag, ConversationStore conversations)
+    {
+        _rag = rag;
+        _conversations = conversations;
+    }
 
     // POST /api/chat/stream
-    // Server-Sent Events: the agent routes the question, answers it (RAG answers are
-    // verified + self-corrected first), and we push each token to the client live.
+    // Server-Sent Events. If a conversationId is supplied, the server loads the prior
+    // turns (+ running summary) from the database so the agent remembers the conversation
+    // — and persists this turn — so memory survives a page refresh.
     [HttpPost("stream")]
     public async Task Stream([FromBody] ChatRequest req)
     {
         // Tell the client this is a live event stream, not a single response.
         Response.Headers.Append("Content-Type", "text/event-stream");
 
-        await foreach (var token in _rag.AskStreamingAsync(req.Question, req.History))
+        var conversationId = req.ConversationId;
+        bool persist = !string.IsNullOrWhiteSpace(conversationId);
+
+        // Load memory BEFORE saving the new question (so history = prior turns only).
+        List<ChatMessageDto>? history = null;
+        string? summary = null;
+        if (persist)
+        {
+            history = await _conversations.GetRecentAsync(conversationId!, 10);
+            summary = await _conversations.GetSummaryAsync(conversationId!);
+            await _conversations.AddMessageAsync(conversationId!, "user", req.Question);
+        }
+
+        var full = new System.Text.StringBuilder();
+        await foreach (var token in _rag.AskStreamingAsync(req.Question, history, summary))
         {
             if (string.IsNullOrEmpty(token)) continue;   // skip the model's empty "thinking" chunks
+            full.Append(token);
             var json = System.Text.Json.JsonSerializer.Serialize(token);  // safely escapes newlines, quotes
             await Response.WriteAsync($"data: {json}\n\n");
             await Response.Body.FlushAsync();
         }
+
+        // Persist the assistant's full reply for next time.
+        if (persist)
+            await _conversations.AddMessageAsync(conversationId!, "assistant", full.ToString());
     }
 }

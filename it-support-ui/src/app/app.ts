@@ -21,14 +21,11 @@ export class App {
   messages = signal<ChatMessage[]>([]);  // the whole conversation (reactive)
   loading = signal(false);               // true while waiting for the API
   input = '';                            // bound to the text box
+  conversationId = crypto.randomUUID();  // one id per chat; the server ties messages to it
 
  async send() {
   const question = this.input.trim();
   if (!question || this.loading()) return;
-
-  // Capture recent conversation BEFORE adding the new question, so the agent
-  // remembers context (e.g. what it proposed before the user says "confirm").
-  const history = this.messages().slice(-6).map(m => ({ role: m.role, text: m.text }));
 
   this.messages.update(list => [...list, { role: 'user', text: question }]);
   this.input = '';
@@ -36,7 +33,7 @@ export class App {
 
   let started = false;
   try {
-    for await (const token of this.chat.askStream(question, history)) {
+    for await (const token of this.chat.askStream(question, this.conversationId)) {
       if (!started) {
         // first token arrived: stop "Thinking…" and add an empty assistant bubble to fill
         started = true;

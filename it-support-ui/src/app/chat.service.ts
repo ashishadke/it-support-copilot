@@ -28,11 +28,11 @@ export class ChatService {
     return this.http.post<ChatAnswer>(`${this.baseUrl}/api/chat`, { question });
   }
   // Streaming version: calls /api/chat/stream and yields each token as it arrives.
-async *askStream(question: string, history: { role: string; text: string }[] = []): AsyncGenerator<string> {
+async *askStream(question: string, conversationId: string): AsyncGenerator<string> {
   const res = await fetch(`${this.baseUrl}/api/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, history })   // send recent turns so the agent has context
+    body: JSON.stringify({ question, conversationId })   // server loads prior turns by conversationId
   });
 
   if (!res.body) return;
