@@ -1,6 +1,23 @@
-:host { display: block; max-width: 720px; margin: 0 auto; padding: 16px;
+:host { display: block; max-width: 1000px; margin: 0 auto; padding: 16px;
         font-family: system-ui, sans-serif; }
-.chat { display: flex; flex-direction: column; height: 90vh; }
+.layout { display: flex; gap: 16px; height: 90vh; }
+
+.sidebar { width: 230px; flex-shrink: 0; display: flex; flex-direction: column;
+           gap: 6px; overflow-y: auto; }
+.new-chat { padding: 10px 12px; border: none; border-radius: 8px; background: #2563eb;
+            color: #fff; font-size: .9rem; cursor: pointer; text-align: left; }
+.new-chat:hover { background: #1d4ed8; }
+.recent-label { font-size: .72rem; color: #888; text-transform: uppercase;
+                letter-spacing: .05em; margin: 10px 0 2px 4px; }
+.chat-item { padding: 8px 10px; border: 1px solid #e2e2e2; border-radius: 8px;
+             background: #fff; font-size: .82rem; color: #333; cursor: pointer;
+             text-align: left; white-space: nowrap; overflow: hidden;
+             text-overflow: ellipsis; }
+.chat-item:hover { background: #eef2ff; }
+.chat-item.active { background: #eef2ff; border-color: #2563eb; color: #1d4ed8; }
+.no-chats { font-size: .8rem; color: #999; margin: 4px; }
+
+.chat { display: flex; flex-direction: column; height: 90vh; flex: 1; min-width: 0; }
 header h1 { margin: 0; font-size: 1.4rem; }
 header p { margin: 4px 0 12px; color: #666; font-size: .9rem; }
 

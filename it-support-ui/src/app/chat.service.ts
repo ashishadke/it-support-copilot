@@ -13,6 +13,17 @@ export interface ChatAnswer {
   answer: string;
   sources: Citation[];
 }
+// One row in the "recent chats" sidebar (from GET /api/conversations).
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  updatedAt: string;
+}
+// One stored message when restoring a chat (from GET /api/conversations/{id}).
+export interface StoredMessage {
+  role: string;
+  text: string;
+}
 
 @Injectable({ providedIn: 'root' })   // makes this service injectable everywhere
 export class ChatService {
@@ -54,6 +65,14 @@ async *askStream(question: string, conversationId: string): AsyncGenerator<strin
       }
     }
   }
+}
+// The 10 most recent chats for the sidebar.
+getConversations(): Observable<ConversationSummary[]> {
+  return this.http.get<ConversationSummary[]>(`${this.baseUrl}/api/conversations`);
+}
+// Full transcript of one chat (for restoring it when clicked).
+getMessages(conversationId: string): Observable<StoredMessage[]> {
+  return this.http.get<StoredMessage[]>(`${this.baseUrl}/api/conversations/${conversationId}`);
 }
 uploadDocument(file: File): Observable<any> {
   const form = new FormData();

@@ -2,6 +2,9 @@ using Npgsql;
 
 namespace ITSupport.Api.Services;
 
+// One row in the UI's "recent chats" sidebar.
+public record ConversationSummaryDto(string Id, string Title, DateTime UpdatedAt);
+
 // Repository for conversation persistence (Postgres). Owns all SQL for the
 // conversations + messages tables so the rest of the app never touches it directly.
 public class ConversationStore
@@ -84,6 +87,45 @@ public class ConversationStore
             list.Add(new ChatMessageDto(reader.GetString(1), reader.GetString(2)));
         }
         return (list, maxId);
+    }
+
+    // The most recent conversations for the UI sidebar (capped — older chats stay in
+    // the DB, they just age off the list). Title = the first user message of the chat.
+    public async Task<List<ConversationSummaryDto>> GetRecentConversationsAsync(int limit = 10)
+    {
+        await using var cmd = _db.CreateCommand(
+            "SELECT c.id, " +
+            "       COALESCE((SELECT m.content FROM messages m " +
+            "                 WHERE m.conversation_id = c.id AND m.role = 'user' " +
+            "                 ORDER BY m.id ASC LIMIT 1), '(empty chat)') AS title, " +
+            "       c.updated_at " +
+            "FROM conversations c ORDER BY c.updated_at DESC LIMIT $1;");
+        cmd.Parameters.AddWithValue(limit);
+
+        var list = new List<ConversationSummaryDto>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            var title = reader.GetString(1);
+            if (title.Length > 60) title = title[..60] + "…";
+            list.Add(new ConversationSummaryDto(reader.GetString(0), title, reader.GetDateTime(2)));
+        }
+        return list;
+    }
+
+    // Full transcript of one conversation (for restoring a chat the user clicks on).
+    public async Task<List<ChatMessageDto>> GetAllMessagesAsync(string conversationId, int limit = 200)
+    {
+        await using var cmd = _db.CreateCommand(
+            "SELECT role, content FROM messages WHERE conversation_id = $1 ORDER BY id ASC LIMIT $2;");
+        cmd.Parameters.AddWithValue(conversationId);
+        cmd.Parameters.AddWithValue(limit);
+
+        var list = new List<ChatMessageDto>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            list.Add(new ChatMessageDto(reader.GetString(0), reader.GetString(1)));
+        return list;
     }
 
     // Store the new merged summary and advance the watermark so those messages are

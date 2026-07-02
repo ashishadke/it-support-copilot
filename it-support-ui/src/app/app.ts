@@ -1,6 +1,6 @@
-import { Component, signal, inject } from '@angular/core';
+import { Component, signal, inject, OnInit } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { ChatService, Citation } from './chat.service';
+import { ChatService, Citation, ConversationSummary } from './chat.service';
 
 // One message in the chat transcript.
 interface ChatMessage {
@@ -27,13 +27,47 @@ function getConversationId(): string {
   templateUrl: './app.html',
   styleUrl: './app.css'
 })
-export class App {
+export class App implements OnInit {
   private chat = inject(ChatService);
 
   messages = signal<ChatMessage[]>([]);  // the whole conversation (reactive)
   loading = signal(false);               // true while waiting for the API
   input = '';                            // bound to the text box
   conversationId = getConversationId();  // persisted in the browser so memory survives refresh
+  recentChats = signal<ConversationSummary[]>([]);  // the sidebar (last 10 chats)
+
+  ngOnInit() {
+    this.refreshRecent();
+    // Restore the current chat's transcript (so a refresh shows the conversation).
+    this.chat.getMessages(this.conversationId).subscribe({
+      next: msgs => this.messages.set(
+        msgs.map(m => ({ role: m.role as 'user' | 'assistant', text: m.text }))),
+      error: () => {}   // brand-new conversation: nothing to restore
+    });
+  }
+
+  refreshRecent() {
+    this.chat.getConversations().subscribe({
+      next: list => this.recentChats.set(list),
+      error: () => {}
+    });
+  }
+
+  // Start a fresh conversation (new id, empty transcript). Old chat stays in the sidebar.
+  newChat() {
+    this.conversationId = crypto.randomUUID();
+    localStorage.setItem('itsupport.conversationId', this.conversationId);
+    this.messages.set([]);
+  }
+
+  // Open a chat from the sidebar: restore its transcript and continue it
+  // (same conversationId, so the server-side memory picks up where it left off).
+  openChat(c: ConversationSummary) {
+    this.conversationId = c.id;
+    localStorage.setItem('itsupport.conversationId', c.id);
+    this.chat.getMessages(c.id).subscribe(msgs =>
+      this.messages.set(msgs.map(m => ({ role: m.role as 'user' | 'assistant', text: m.text }))));
+  }
 
  async send() {
   const question = this.input.trim();
@@ -64,6 +98,7 @@ export class App {
     this.messages.update(list => [...list, { role: 'assistant', text: '⚠️ Could not reach the API.' }]);
   } finally {
     this.loading.set(false);
+    this.refreshRecent();   // keep the sidebar order/titles up to date
   }
 }
 uploadStatus = signal('');

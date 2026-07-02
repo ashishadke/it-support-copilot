@@ -1,4 +1,18 @@
-<div class="chat">
+<div class="layout">
+  <aside class="sidebar">
+    <button class="new-chat" (click)="newChat()">＋ New chat</button>
+    <div class="recent-label">Recent chats</div>
+    @for (c of recentChats(); track c.id) {
+      <button class="chat-item" [class.active]="c.id === conversationId" (click)="openChat(c)">
+        {{ c.title }}
+      </button>
+    }
+    @if (recentChats().length === 0) {
+      <p class="no-chats">No chats yet</p>
+    }
+  </aside>
+
+  <div class="chat">
   <header>
     <h1>IT Support Copilot</h1>
     <p>Ask about VPN, passwords, leave policy, and more.</p>
@@ -43,4 +57,5 @@
            autocomplete="off" [disabled]="loading()" />
     <button type="submit" [disabled]="loading()">Send</button>
   </form>
+  </div>
 </div>
