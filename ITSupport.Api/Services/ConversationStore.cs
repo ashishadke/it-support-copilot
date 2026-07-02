@@ -59,4 +59,43 @@ public class ConversationStore
         cmd.Parameters.AddWithValue(conversationId);
         return await cmd.ExecuteScalarAsync() as string;
     }
+
+    // Messages that are (a) not yet covered by the summary (id > summarized_upto) and
+    // (b) OLDER than the live window of the most recent `keepLast` messages — i.e. the
+    // turns that have fallen out of the window and would otherwise be forgotten.
+    public async Task<(List<ChatMessageDto> Messages, long MaxId)> GetUnsummarizedOlderAsync(
+        string conversationId, int keepLast = 10)
+    {
+        await using var cmd = _db.CreateCommand(
+            "SELECT id, role, content FROM messages " +
+            "WHERE conversation_id = $1 " +
+            "  AND id > (SELECT summarized_upto FROM conversations WHERE id = $1) " +
+            "  AND id <= (SELECT COALESCE(MAX(id),0) - $2 FROM messages WHERE conversation_id = $1) " +
+            "ORDER BY id ASC;");
+        cmd.Parameters.AddWithValue(conversationId);
+        cmd.Parameters.AddWithValue((long)keepLast);
+
+        var list = new List<ChatMessageDto>();
+        long maxId = 0;
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            maxId = reader.GetInt64(0);
+            list.Add(new ChatMessageDto(reader.GetString(1), reader.GetString(2)));
+        }
+        return (list, maxId);
+    }
+
+    // Store the new merged summary and advance the watermark so those messages are
+    // never summarized twice.
+    public async Task SaveSummaryAsync(string conversationId, string summary, long summarizedUpto)
+    {
+        await using var cmd = _db.CreateCommand(
+            "UPDATE conversations SET summary = $2, summarized_upto = $3, updated_at = now() " +
+            "WHERE id = $1;");
+        cmd.Parameters.AddWithValue(conversationId);
+        cmd.Parameters.AddWithValue(summary);
+        cmd.Parameters.AddWithValue(summarizedUpto);
+        await cmd.ExecuteNonQueryAsync();
+    }
 }

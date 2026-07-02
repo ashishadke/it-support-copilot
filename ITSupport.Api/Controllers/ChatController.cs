@@ -53,6 +53,19 @@ public class ChatController : ControllerBase
 
         // Persist the assistant's full reply for next time.
         if (persist)
+        {
             await _conversations.AddMessageAsync(conversationId!, "assistant", full.ToString());
+
+            // MEMORY MAINTENANCE (runs AFTER the response is sent, so the user never
+            // waits for it): once >=10 messages have fallen out of the live window,
+            // condense them into the running summary and advance the watermark.
+            var (older, maxId) = await _conversations.GetUnsummarizedOlderAsync(conversationId!, keepLast: 10);
+            if (older.Count >= 6)
+            {
+                var previous = await _conversations.GetSummaryAsync(conversationId!);
+                var merged = await _rag.SummarizeAsync(previous, older);
+                await _conversations.SaveSummaryAsync(conversationId!, merged, maxId);
+            }
+        }
     }
 }

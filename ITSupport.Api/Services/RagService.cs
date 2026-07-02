@@ -184,6 +184,28 @@ public class RagService
             yield return update.Text;
     }
 
+    // Condense older conversation turns into a compact running summary (merging with
+    // the previous summary). Keeps long conversations cheap: the prompt carries this
+    // summary + only the last N verbatim messages, instead of the whole history.
+    public async Task<string> SummarizeAsync(string? previousSummary, List<ChatMessageDto> olderTurns)
+    {
+        var transcript = string.Join("\n", olderTurns.Select(m => $"{m.Role}: {m.Text}"));
+        var messages = new List<ChatMessage>
+        {
+            new(ChatRole.System,
+                "You maintain a running summary of an IT-support conversation. Merge the previous " +
+                "summary (if any) with the new turns into ONE concise summary (max ~150 words). " +
+                "Keep only facts that matter later: who/what was discussed, decisions, ticket ids and " +
+                "their status, pending actions. Reply with ONLY the summary text."),
+            new(ChatRole.User,
+                $"PREVIOUS SUMMARY:\n{previousSummary ?? "(none)"}\n\nNEW TURNS:\n{transcript}")
+        };
+        var response = await _chat.GetResponseAsync(messages, new ChatOptions { Temperature = 0 });
+        var summary = response.Text.Trim();
+        Console.WriteLine($"[MEMORY] summarized {olderTurns.Count} older turn(s) -> {summary.Length} chars");
+        return summary;
+    }
+
     // The document-retrieval TOOL the agent calls. Embeds the query (cached), pulls the
     // most similar chunks from pgvector, and returns them with source citations.
     [Description("Search the company's internal documents for relevant information.")]
