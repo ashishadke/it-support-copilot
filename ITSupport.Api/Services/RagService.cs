@@ -158,6 +158,8 @@ public class RagService
             "Answer ONLY from what it returns; if nothing relevant comes back, say you don't know.\n" +
             "- check_system_health: live up/down status of a named system.\n" +
             "- get_ticket_status: look up a support ticket by its numeric id.\n" +
+            "- list_tickets: list/count tickets (optionally by status) — use for 'how many tickets " +
+            "are pending', 'list open tickets', etc.\n" +
             "- create_ticket: creates a ticket — this CHANGES data, so FIRST call it with " +
             "confirmed=false to preview and ask the user to confirm; only call confirmed=true after " +
             "they have explicitly confirmed.\n" +

@@ -31,6 +31,41 @@ public static class TicketTools
         return $"No ticket found with id {ticketId}.";
     }
 
+    // READ-ONLY tool: list/count tickets. Answers "how many tickets are pending",
+    // "list open tickets", "what tickets are there", etc.
+    [McpServerTool, Description(
+        "Lists support tickets with their status. Optionally filter by an exact status " +
+        "(valid values: 'Open', 'In Progress', 'Resolved'). For vague questions like " +
+        "'how many are pending/unresolved', call with NO status and count the results yourself " +
+        "(pending usually means Open or In Progress).")]
+    public static async Task<string> ListTickets(
+        [Description("Optional exact status filter, e.g. 'Open'. Leave empty to list ALL tickets.")] string? status = null)
+    {
+        Console.Error.WriteLine($"[TOOL] ListTickets called with status='{status}'");
+
+        await using var conn = new NpgsqlConnection(ConnectionString);
+        await conn.OpenAsync();
+
+        var sql = "SELECT id, title, status FROM tickets";
+        if (!string.IsNullOrWhiteSpace(status)) sql += " WHERE lower(status) = lower($1)";
+        sql += " ORDER BY id;";
+
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        if (!string.IsNullOrWhiteSpace(status)) cmd.Parameters.AddWithValue(status);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        var lines = new List<string>();
+        while (await reader.ReadAsync())
+            lines.Add($"#{reader.GetInt32(0)}: \"{reader.GetString(1)}\" — {reader.GetString(2)}");
+
+        if (lines.Count == 0)
+            return string.IsNullOrWhiteSpace(status)
+                ? "There are no tickets."
+                : $"There are no tickets with status '{status}'.";
+
+        return $"{lines.Count} ticket(s):\n" + string.Join("\n", lines);
+    }
+
     // WRITE tool with built-in human-approval gating:
     //   confirmed = false  -> PREVIEW only, no row is created.
     //   confirmed = true   -> actually inserts the ticket.
